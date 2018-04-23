@@ -28,7 +28,7 @@ typedef struct cache {
 
 int hits = 0;
 int misses = 0;
-int evictions = 0; 
+int evictions = 0;  
 
 void message() {
 	printf ("Format: ./csim-ref [-hv] -s <s> -E <E> -b <b> -t <tracefile> \n");
