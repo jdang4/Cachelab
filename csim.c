@@ -1,7 +1,6 @@
 #include "cachelab.h"
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <getopt.h>
 #include <string.h>
 #include <math.h>
@@ -28,7 +27,7 @@ typedef struct cache {
 
 int hits = 0;
 int misses = 0;
-int evictions = 0;  
+int evictions = 0;
 
 void message() {
 	printf ("Format: ./csim-ref [-hv] -s <s> -E <E> -b <b> -t <tracefile> \n");
@@ -42,11 +41,28 @@ void message() {
 	exit(0);
 }
 
+//gets the size from the second part of the tracefile
+char* getSize(char* address) {
+	int stringLength = strlen(address);
+	char* Size = malloc(stringLength * sizeof(char));
+
+	for(int i = 0; i <= stringLength; i++) {
+		if(address[i] == ',') {
+			Size[0] = address[i + 1];
+			Size[1] = '\0';
+			break;
+		}
+	}
+
+	return Size;
+}
+
+// this removes the comma from the address
 char* removeComma(char* address) {
 	int stringLength = strlen(address);
 	char* new = malloc(stringLength * sizeof(char));
 
-	for (int i = 0; i < stringLength; i++) {
+	for (int i = 0; i <= stringLength; i++) {
 		if (address[i] != ',') {
 			new[i] = address[i];
 		}
@@ -61,31 +77,53 @@ char* removeComma(char* address) {
 }
 
 // this checks to see if there is a matching block within the row of the set index
-void checkBlockMatch(Cache cache, int index, int tagBits, const char *inst, int* match, int* lineIndex) {
+void checkBlockMatch(Cache cache, int index, int tagBits, char *inst, int* match, int* lineIndex) {
 
 	for (int i = 0; i < cache.E; i++) {
-		if ( cache.cacheBlock[(index * cache.E)].isValid == 1 &&
-			cache.cacheBlock[(index * cache.E)].tag == tagBits) {
+		if ( cache.cacheBlock[(index * cache.E) + i].isValid == 1 &&
+			cache.cacheBlock[(index * cache.E) + i].tag == tagBits) {
 
 			hits++;
-			cache.cacheBlock[(index * cache.E)].data = *lineIndex;
+			cache.cacheBlock[(index * cache.E) + i].data = *lineIndex;
 			*match = 1;
 
 			if (!(strcmp(inst, "M"))) {
 				hits++;
+				printf("Hit ");
 			}
-			break; //don't need to continue checking
+			printf("Hit\n");
+			break;
 	    }
 	}
 }
 
-void checkEmptyLines(Cache cache, int index, _Bool* isActive, int* evictionIndex) {
-	/*
-	checks for any empty lines 
-	a.) basically iterates through the lines and checking to see if any have isValid set to 1
-	b.) if none are set to 1, set the block to not being in use
-	c.) store the index value so that it can be used to determine the index at which there will be eviction
-	*/
+// this checks to see if there are any empty lines 
+void checkEmptyLines(Cache cache, int index, int* isFull, int* evictionIndex) {
+
+	  for (int i = 0; i < cache.E; i++) {
+	  	if ( cache.cacheBlock[((index * cache.E)+i)].isValid != 1) {
+	  		*evictionIndex = i;
+	  		*isFull = 0;
+	  		break;
+	  	}
+	  }
+}
+
+// this basically handles the event where there is an eviction
+void cacheEviction(Cache cache, int* isFull, int index, int* temp, int* evictionIndex, int* evict) {
+	if (*isFull == 1) {
+		for (int i = 0; i < cache.E; i++) {
+			// if the value of the data is lower than the current value of temp, then set index value
+			// of the evicted block to the current i position
+			// used to determine the index value of the evicted block
+			if (cache.cacheBlock[(index * cache.E) + i].data < *temp) {
+				*temp = cache.cacheBlock[(index * cache.E) + i].data;
+				*evictionIndex = i;
+			}
+		}
+		evictions++;
+		*evict = 1; // there has been an eviction that occurred so set to 1 (aka true)
+	}
 }
 
 
@@ -106,7 +144,7 @@ int main(int argc, char *argv[]) {
 		switch (option) {
 			case ('h') :
 				message();
-				exit(1);
+				exit(0);
 			case ('v') : 
 				vFlag = 1;  // right now this is giving error, try to fix this
 				break;
@@ -171,18 +209,22 @@ int main(int argc, char *argv[]) {
 		cache.cacheBlock[i].data = 0;
 	}
 
-	char operation; 
-	char address; 
-	int size; // specifies the number of bytes accessed by the operation
-	int lineIndex = 1; //used as a counter used to check for evictions
+	char operation[10][10]; // will store all the operations
+	char address[10][10];  // will store all the addresses
+	int lineIndex = 1; //used as a counter used, which would be used to check for evictions
 
 	char* ptr; // needed in order to convert address to hexidecimal
-	while(fscanf(trace, "%s %s %d", &operation, &address, &size) != EOF) {
+	while(fscanf(trace, "%s %s ", *operation, *address) != EOF) {
 
-		char* addressNC = removeComma(&address); // a version of address but without the comma
+		char* addressNC = removeComma(*address); // a version of address but without the comma
+		char* Size = getSize(*address); // gets the size from the tracefile
 		int hexVersion = strtol(addressNC, &ptr, 16); // converts address to hexidecimal address
 
-		if (strcmp(&operation, "I")) {
+		if (strcmp(*operation, "I")) {
+
+			if (vFlag == 1) {
+				printf(" %s %s, %s ", *operation, addressNC, Size);
+			}
 
 			// calculations to get the tag bits within each block
 			int tagBit = hexVersion >> (cache.b + cache.s);
@@ -191,23 +233,45 @@ int main(int argc, char *argv[]) {
 			int setIndex = ( (hexVersion ^ (tagBit << (cache.b + cache.s))) >> cache.b);
 
 			int match = 0; // this will indicate if there is a matching block within the cache 
+			int evict = 0; // this will indicate if there is an eviction that occured
 
 
-			checkBlockMatch(cache, setIndex, tagBit, &operation, &match, &lineIndex);
+			checkBlockMatch(cache, setIndex, tagBit, *operation, &match, &lineIndex);
 
 			// if there is no match, then overwrite into the cache
 			if (!match) {
-				misses++;
-				_Bool active = true;
-				evictionIndex = 0; 
-				checkEmptyLines(cache, setIndex, &active, &evictionIndex);
+				misses++; // not in cache, so miss
+				printf("miss ");
+				int isFull = 1; // checks to see if any space left
+				int evictionIndex; // this will store the index of the evicted block 
+				int temp = lineIndex; // temporarily holds the value of the line index
 
-				// Eviction Part
+				checkEmptyLines(cache, setIndex, &isFull, &evictionIndex);
+
+				cacheEviction(cache, &isFull, setIndex, &temp, &evictionIndex, &evict);
+
+				cache.cacheBlock[(setIndex * cache.E) + evictionIndex].isValid = 1;
+				cache.cacheBlock[(setIndex * cache.E) + evictionIndex].tag = tagBit;
+				cache.cacheBlock[(setIndex * cache.E) + evictionIndex].data = lineIndex;
+
+				if (evict) {
+					printf("eviction ");
+				}
+
+				if (!(strcmp(*operation, "M"))) {
+					hits++;
+					printf("hit");
+				}
+
+				printf("\n");
 			}
+
+			lineIndex++;
 
 		}
 	}
 
+	printf("Congratulations!!! You have proven that P = NP\n");
 
     printSummary(hits, misses, evictions);
     return 0;
